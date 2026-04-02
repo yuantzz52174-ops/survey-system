@@ -125,26 +125,51 @@
 
 ## 项目结构
 survey-system/
+
 ├── app.js
+
 ├── package.json
+
 ├── .env
+
 ├── README.md
+
 ├── config/
+
 │   └── db.js
+
 ├── controllers/
+
 ├── models/
+
 ├── routes/
+
 ├── services/
+
 ├── middleware/
+
 ├── public/
+
 │   ├── register.html
+
 │   ├── login.html
+
 │   ├── manage.html
+
 │   ├── fill.html
+
 │   ├── stats.html
+
 │   ├── common.js
+
 │   └── style.css
+
 └── docs/
+
     ├── ai-log.md
+    
     ├── report.md
+    
     └── test-cases.md
+
+
