@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>填写问卷 - 问卷系统</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="navbar" class="navbar"></div>
+
+  <div class="container">
+    <div class="card">
+      <h1>填写问卷</h1>
+      <input id="accessCode" placeholder="请输入问卷 accessCode" />
+      <button onclick="startFillSurvey()">开始填写</button>
+      <p class="small">如果你刚创建过问卷，可以直接从浏览器本地读取当前 accessCode。</p>
+      <button class="secondary" onclick="loadSavedAccessCode()">读取当前问卷码</button>
+    </div>
+
+    <div class="card">
+      <h2>问卷信息与作答区</h2>
+      <div id="surveyInfo"></div>
+      <div id="questionBox"></div>
+      <pre id="result"></pre>
+    </div>
+  </div>
+
+  <script src="/common.js"></script>
+  <script>
+    renderNavbar('fill');
+    ensureLoggedIn();
+
+    let currentSurvey = null;
+    let currentQuestion = null;
+    let collectedAnswers = [];
+
+    function loadSavedAccessCode() {
+      const code = localStorage.getItem('currentAccessCode') || '';
+      document.getElementById('accessCode').value = code;
+    }
+
+    function renderSurveyInfo(survey) {
+      document.getElementById('surveyInfo').innerHTML = `
+        <div><strong>标题：</strong>${survey.title}</div>
+        <div><strong>说明：</strong>${survey.description || ''}</div>
+        <div><strong>问卷码：</strong>${survey.accessCode}</div>
+      `;
+    }
+
+    function buildQuestionValue(question) {
+      if (question.type === 'single') {
+        const checked = document.querySelector(`input[name="q_${question._id}"]:checked`);
+        return checked ? checked.value : '';
+      }
+
+      if (question.type === 'multiple') {
+        const checked = document.querySelectorAll(`input[name="q_${question._id}"]:checked`);
+        return Array.from(checked).map(item => item.value);
+      }
+
+      if (question.type === 'number') {
+        const value = document.getElementById(`q_${question._id}`).value.trim();
+        return value === '' ? '' : Number(value);
+      }
+
+      return document.getElementById(`q_${question._id}`).value;
+    }
+
+    function renderQuestion(question) {
+      currentQuestion = question;
+
+      let html = `
+        <div class="question-card">
+          <h3>${question.order}. ${question.title}</h3>
+          <div class="small">题型：${question.type} ｜ 必答：${question.required ? '是' : '否'}</div>
+      `;
+
+      if (question.type === 'single') {
+        html += question.options.map(option => `
+          <div class="inline">
+            <input type="radio" name="q_${question._id}" value="${option}" />
+            <span>${option}</span>
+          </div>
+        `).join('');
+      } else if (question.type === 'multiple') {
+        html += question.options.map(option => `
+          <div class="inline">
+            <input type="checkbox" name="q_${question._id}" value="${option}" />
+            <span>${option}</span>
+          </div>
+        `).join('');
+      } else if (question.type === 'number') {
+        html += `<input id="q_${question._id}" type="number" placeholder="请输入数字" />`;
+      } else {
+        html += `<textarea id="q_${question._id}" placeholder="请输入内容"></textarea>`;
+      }
+
+      html += `
+          <button onclick="goNext()">下一题</button>
+          <button class="secondary" onclick="submitSurvey()">提交问卷</button>
+        </div>
+      `;
+
+      document.getElementById('questionBox').innerHTML = html;
+    }
+
+    async function startFillSurvey() {
+      try {
+        const accessCode = document.getElementById('accessCode').value.trim();
+
+        const data = await request(`/api/fill/${accessCode}`, {
+          method: 'GET',
+          headers: getAuthHeaders(false)
+        });
+
+        currentSurvey = data.survey;
+        collectedAnswers = [];
+
+        renderSurveyInfo(currentSurvey);
+        showJson('result', data);
+
+        if (!currentSurvey.firstQuestion) {
+          document.getElementById('questionBox').innerHTML = '<p>该问卷没有题目。</p>';
+          return;
+        }
+
+        renderQuestion(currentSurvey.firstQuestion);
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function goNext() {
+      try {
+        if (!currentSurvey || !currentQuestion) {
+          alert('请先开始填写问卷');
+          return;
+        }
+
+        const value = buildQuestionValue(currentQuestion);
+
+        collectedAnswers = collectedAnswers.filter(
+          item => item.questionId !== currentQuestion._id
+        );
+
+        collectedAnswers.push({
+          questionId: currentQuestion._id,
+          value
+        });
+
+        const data = await request(`/api/fill/${currentSurvey.accessCode}/next`, {
+          method: 'POST',
+          headers: getAuthHeaders(true),
+          body: JSON.stringify({
+            questionId: currentQuestion._id,
+            value
+          })
+        });
+
+        showJson('result', {
+          currentQuestion: currentQuestion.title,
+          answer: value,
+          nextResponse: data,
+          collectedAnswers
+        });
+
+        if (data.completed) {
+          document.getElementById('questionBox').innerHTML = `
+            <div class="question-card">
+              <h3>已经到达最后</h3>
+              <p>请点击下面按钮提交问卷。</p>
+              <button class="secondary" onclick="submitSurvey()">提交问卷</button>
+            </div>
+          `;
+          currentQuestion = null;
+          return;
+        }
+
+        renderQuestion(data.nextQuestion);
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function submitSurvey() {
+      try {
+        if (!currentSurvey) {
+          alert('请先开始填写问卷');
+          return;
+        }
+
+        const data = await request(`/api/fill/${currentSurvey.accessCode}/submit`, {
+          method: 'POST',
+          headers: getAuthHeaders(true),
+          body: JSON.stringify({
+            answers: collectedAnswers
+          })
+        });
+
+        showJson('result', data);
+        document.getElementById('questionBox').innerHTML = '<p>提交成功，感谢填写。</p>';
+        alert('提交成功');
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    loadSavedAccessCode();
+  </script>
+</body>
+</html>

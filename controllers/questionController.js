@@ -93,3 +93,65 @@ exports.getQuestionsBySurvey = async (req, res) => {
     });
   }
 };
+
+exports.updateQuestionJumpLogic = async (req, res) => {
+  try {
+    const { questionId } = req.params;
+    const { jumpLogic } = req.body;
+
+    if (!Array.isArray(jumpLogic)) {
+      return res.status(400).json({ message: 'jumpLogic 必须是数组' });
+    }
+
+    const question = await Question.findById(questionId);
+    if (!question) {
+      return res.status(404).json({ message: '题目不存在' });
+    }
+
+    const survey = await Survey.findOne({
+      _id: question.surveyId,
+      ownerId: req.user.userId
+    });
+
+    if (!survey) {
+      return res.status(403).json({ message: '无权限修改该题目' });
+    }
+
+    const allQuestions = await Question.find({ surveyId: question.surveyId });
+
+    for (const rule of jumpLogic) {
+      if (!rule.condition || !rule.targetQuestionId) {
+        return res.status(400).json({ message: '每条跳转规则都必须包含 condition 和 targetQuestionId' });
+      }
+
+      const targetQuestion = allQuestions.find(
+        q => q._id.toString() === rule.targetQuestionId.toString()
+      );
+
+      if (!targetQuestion) {
+        return res.status(400).json({ message: 'targetQuestionId 不存在于当前问卷中' });
+      }
+
+      if (targetQuestion._id.toString() === question._id.toString()) {
+        return res.status(400).json({ message: '不能跳转到自己' });
+      }
+
+      if (targetQuestion.order <= question.order) {
+        return res.status(400).json({ message: '当前版本只允许向后跳转，不能跳转到当前题或前面的题目' });
+      }
+    }
+
+    question.jumpLogic = jumpLogic;
+    await question.save();
+
+    res.json({
+      message: '跳转逻辑更新成功',
+      question
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: '更新跳转逻辑失败',
+      error: error.message
+    });
+  }
+};

@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>创建和发布问卷 - 问卷系统</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="navbar" class="navbar"></div>
+
+  <div class="container">
+    <div class="card">
+      <h1>创建问卷</h1>
+      <input id="surveyTitle" placeholder="问卷标题" />
+      <textarea id="surveyDescription" placeholder="问卷说明"></textarea>
+      <label class="inline">
+        <input id="surveyAnonymous" type="checkbox" checked />
+        允许匿名填写
+      </label>
+      <input id="surveyDeadline" type="datetime-local" />
+      <button onclick="createSurvey()">创建问卷</button>
+      <button class="secondary" onclick="createPresetSurvey()">一键创建 AI 作业调查问卷</button>
+      <pre id="createSurveyResult"></pre>
+    </div>
+
+    <div class="card">
+      <h2>我的问卷</h2>
+      <button onclick="loadMySurveys()">刷新我的问卷</button>
+      <div id="mySurveys"></div>
+    </div>
+
+    <div class="card">
+      <h2>手动添加题目</h2>
+      <input id="questionSurveyId" placeholder="问卷 ID" />
+      <input id="questionOrder" type="number" placeholder="题目顺序，例如 1" />
+      <select id="questionType" onchange="toggleQuestionFields()">
+        <option value="single">单选题</option>
+        <option value="multiple">多选题</option>
+        <option value="text">文字题</option>
+        <option value="number">数字题</option>
+      </select>
+      <input id="questionTitle" placeholder="题目标题" />
+      <label class="inline">
+        <input id="questionRequired" type="checkbox" />
+        必答题
+      </label>
+
+      <div id="optionsBlock">
+        <input id="questionOptions" placeholder="选项，多个用英文逗号分隔" />
+      </div>
+
+      <div class="grid two">
+        <input id="ruleMinSelect" type="number" placeholder="最少选择数（多选）" />
+        <input id="ruleMaxSelect" type="number" placeholder="最多选择数（多选）" />
+        <input id="ruleMinLength" type="number" placeholder="最少字数（文字题）" />
+        <input id="ruleMaxLength" type="number" placeholder="最多字数（文字题）" />
+        <input id="ruleMinValue" type="number" placeholder="最小值（数字题）" />
+        <input id="ruleMaxValue" type="number" placeholder="最大值（数字题）" />
+      </div>
+
+      <label class="inline">
+        <input id="ruleIsInteger" type="checkbox" />
+        必须为整数（数字题）
+      </label>
+
+      <button onclick="addQuestion()">添加题目</button>
+      <pre id="addQuestionResult"></pre>
+    </div>
+
+    <div class="card">
+      <h2>配置跳转逻辑</h2>
+      <input id="jumpQuestionId" placeholder="当前题目 ID" />
+      <select id="jumpOperator">
+        <option value="equals">equals</option>
+        <option value="notEquals">notEquals</option>
+        <option value="includes">includes</option>
+        <option value="notIncludes">notIncludes</option>
+        <option value="greaterThan">greaterThan</option>
+        <option value="greaterThanOrEqual">greaterThanOrEqual</option>
+        <option value="lessThan">lessThan</option>
+        <option value="lessThanOrEqual">lessThanOrEqual</option>
+      </select>
+      <input id="jumpValue" placeholder="条件值，例如 女 / 否 / 60" />
+      <input id="jumpTargetQuestionId" placeholder="跳转目标题目 ID" />
+      <button onclick="updateJumpLogic()">保存跳转逻辑</button>
+      <pre id="jumpResult"></pre>
+    </div>
+  </div>
+
+  <script src="/common.js"></script>
+  <script>
+    renderNavbar('manage');
+    ensureLoggedIn();
+
+    function toggleQuestionFields() {
+      const type = document.getElementById('questionType').value;
+      const optionsBlock = document.getElementById('optionsBlock');
+      optionsBlock.style.display =
+        type === 'single' || type === 'multiple' ? 'block' : 'none';
+    }
+
+    toggleQuestionFields();
+
+    async function createSurvey() {
+      try {
+        const title = document.getElementById('surveyTitle').value.trim();
+        const description = document.getElementById('surveyDescription').value.trim();
+        const isAnonymous = document.getElementById('surveyAnonymous').checked;
+        const deadlineRaw = document.getElementById('surveyDeadline').value;
+        const deadline = deadlineRaw ? new Date(deadlineRaw).toISOString() : null;
+
+        const data = await request('/api/surveys/create', {
+          method: 'POST',
+          headers: getAuthHeaders(true),
+          body: JSON.stringify({
+            title,
+            description,
+            isAnonymous,
+            deadline
+          })
+        });
+
+        showJson('createSurveyResult', data);
+        document.getElementById('questionSurveyId').value = data.survey._id || data.survey.id || '';
+        await loadMySurveys();
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function loadMySurveys() {
+      try {
+        const data = await request('/api/surveys/my', {
+          method: 'GET',
+          headers: getAuthHeaders(false)
+        });
+
+        const surveys = data.surveys || data;
+        const box = document.getElementById('mySurveys');
+
+        if (!surveys.length) {
+          box.innerHTML = '<p class="small">暂无问卷</p>';
+          return;
+        }
+
+        box.innerHTML = surveys.map(item => `
+  <div class="survey-item">
+            <div><strong>标题：</strong>${item.title}</div>
+            <div><strong>ID：</strong>${item._id}</div>
+            <div><strong>accessCode：</strong>${item.accessCode}</div>
+            <div><strong>发布状态：</strong>${item.isPublished ? '已发布' : '未发布'}</div>
+            <div><strong>关闭状态：</strong>${item.isClosed ? '已关闭' : '未关闭'}</div>
+            <div class="grid two">
+                <button onclick="setCurrentSurvey('${item._id}', '${item.accessCode}')">设为当前问卷</button>
+                <button class="secondary" onclick="publishSurvey('${item._id}')">发布问卷</button>
+                <button class="danger" onclick="closeSurvey('${item._id}')">关闭问卷</button>
+                <button onclick="goToStats('${item._id}')">查看统计</button>
+            </div>
+        </div>
+`).join('');
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    function setCurrentSurvey(surveyId, accessCode) {
+      document.getElementById('questionSurveyId').value = surveyId;
+      localStorage.setItem('currentSurveyId', surveyId);
+      localStorage.setItem('currentAccessCode', accessCode);
+      alert('已设为当前问卷');
+    }
+
+    function goToStats(surveyId) {
+      localStorage.setItem('currentSurveyId', surveyId);
+      window.location.href = '/stats.html';
+    }
+
+    async function publishSurvey(id) {
+      try {
+        const data = await request(`/api/surveys/${id}/publish`, {
+          method: 'PATCH',
+          headers: getAuthHeaders(false)
+        });
+        alert('发布成功');
+        console.log(data);
+        await loadMySurveys();
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function closeSurvey(id) {
+      try {
+        const data = await request(`/api/surveys/${id}/close`, {
+          method: 'PATCH',
+          headers: getAuthHeaders(false)
+        });
+        alert('关闭成功');
+        console.log(data);
+        await loadMySurveys();
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function addQuestion() {
+      try {
+        const surveyId = document.getElementById('questionSurveyId').value.trim();
+        const order = Number(document.getElementById('questionOrder').value);
+        const type = document.getElementById('questionType').value;
+        const title = document.getElementById('questionTitle').value.trim();
+        const required = document.getElementById('questionRequired').checked;
+        const optionsRaw = document.getElementById('questionOptions').value.trim();
+
+        const minSelect = document.getElementById('ruleMinSelect').value;
+        const maxSelect = document.getElementById('ruleMaxSelect').value;
+        const minLength = document.getElementById('ruleMinLength').value;
+        const maxLength = document.getElementById('ruleMaxLength').value;
+        const minValue = document.getElementById('ruleMinValue').value;
+        const maxValue = document.getElementById('ruleMaxValue').value;
+        const isInteger = document.getElementById('ruleIsInteger').checked;
+
+        const rules = {
+          minSelect: minSelect === '' ? null : Number(minSelect),
+          maxSelect: maxSelect === '' ? null : Number(maxSelect),
+          minLength: minLength === '' ? null : Number(minLength),
+          maxLength: maxLength === '' ? null : Number(maxLength),
+          minValue: minValue === '' ? null : Number(minValue),
+          maxValue: maxValue === '' ? null : Number(maxValue),
+          isInteger
+        };
+
+        const body = {
+          order,
+          type,
+          title,
+          required,
+          rules
+        };
+
+        if (type === 'single' || type === 'multiple') {
+          body.options = optionsRaw.split(',').map(v => v.trim()).filter(Boolean);
+        }
+
+        const data = await request(`/api/questions/${surveyId}`, {
+          method: 'POST',
+          headers: getAuthHeaders(true),
+          body: JSON.stringify(body)
+        });
+
+        showJson('addQuestionResult', data);
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function updateJumpLogic() {
+      try {
+        const questionId = document.getElementById('jumpQuestionId').value.trim();
+        const operator = document.getElementById('jumpOperator').value;
+        const rawValue = document.getElementById('jumpValue').value.trim();
+        const targetQuestionId = document.getElementById('jumpTargetQuestionId').value.trim();
+
+        let parsedValue = rawValue;
+        if (!Number.isNaN(Number(rawValue)) && rawValue !== '') {
+          parsedValue = Number(rawValue);
+        }
+
+        const data = await request(`/api/questions/${questionId}/jump-logic`, {
+          method: 'PATCH',
+          headers: getAuthHeaders(true),
+          body: JSON.stringify({
+            jumpLogic: [
+              {
+                condition: {
+                  operator,
+                  value: parsedValue
+                },
+                targetQuestionId
+              }
+            ]
+          })
+        });
+
+        showJson('jumpResult', data);
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function createPresetSurvey() {
+      try {
+        const surveyData = await request('/api/surveys/create', {
+          method: 'POST',
+          headers: getAuthHeaders(true),
+          body: JSON.stringify({
+            title: '大学生作业与 AI 使用情况调查',
+            description: '调查大学生在完成作业时是否使用 AI 以及使用方式',
+            isAnonymous: true,
+            deadline: null
+          })
+        });
+
+        const surveyId = surveyData.survey._id;
+        const accessCode = surveyData.survey.accessCode;
+
+        const q1 = await request(`/api/questions/${surveyId}`, {
+          method: 'POST',
+          headers: getAuthHeaders(true),
+          body: JSON.stringify({
+            order: 1,
+            type: 'text',
+            title: '在大学中修读的专业？',
+            required: true,
+            rules: {}
+          })
+        });
+
+        const q2 = await request(`/api/questions/${surveyId}`, {
+          method: 'POST',
+          headers: getAuthHeaders(true),
+          body: JSON.stringify({
+            order: 2,
+            type: 'single',
+            title: '完成作业是否使用AI？',
+            options: ['是', '否'],
+            required: true
+          })
+        });
+
+        const q3 = await request(`/api/questions/${surveyId}`, {
+          method: 'POST',
+          headers: getAuthHeaders(true),
+          body: JSON.stringify({
+            order: 3,
+            type: 'multiple',
+            title: '使用AI做什么工作？',
+            options: ['编程', '撰写文章', '提供设计思路', '画图', '其它'],
+            required: false,
+            rules: {
+              maxSelect: 3
+            }
+          })
+        });
+
+        const q4 = await request(`/api/questions/${surveyId}`, {
+          method: 'POST',
+          headers: getAuthHeaders(true),
+          body: JSON.stringify({
+            order: 4,
+            type: 'number',
+            title: '借助AI完成的作业大概的平均分？',
+            required: false,
+            rules: {
+              isInteger: true
+            }
+          })
+        });
+
+        const q5 = await request(`/api/questions/${surveyId}`, {
+          method: 'POST',
+          headers: getAuthHeaders(true),
+          body: JSON.stringify({
+            order: 5,
+            type: 'text',
+            title: '对AI的建议与态度？',
+            required: false,
+            rules: {
+              maxLength: 200
+            }
+          })
+        });
+
+        await request(`/api/questions/${q2.question._id}/jump-logic`, {
+          method: 'PATCH',
+          headers: getAuthHeaders(true),
+          body: JSON.stringify({
+            jumpLogic: [
+              {
+                condition: {
+                  operator: 'equals',
+                  value: '否'
+                },
+                targetQuestionId: q5.question._id
+              }
+            ]
+          })
+        });
+
+        showJson('createSurveyResult', {
+          message: 'AI 作业调查问卷创建成功',
+          survey: surveyData.survey,
+          questionIds: {
+            q1: q1.question._id,
+            q2: q2.question._id,
+            q3: q3.question._id,
+            q4: q4.question._id,
+            q5: q5.question._id
+          }
+        });
+
+        localStorage.setItem('currentSurveyId', surveyId);
+        localStorage.setItem('currentAccessCode', accessCode);
+        document.getElementById('questionSurveyId').value = surveyId;
+
+        await loadMySurveys();
+        alert('创建成功。接下来请点击“发布问卷”。');
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    loadMySurveys();
+  </script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>注册 - 问卷系统</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="navbar" class="navbar"></div>
+
+  <div class="container">
+    <div class="card">
+      <h1>用户注册</h1>
+      <input id="username" placeholder="请输入用户名" />
+      <input id="password" type="password" placeholder="请输入密码" />
+      <button onclick="registerUser()">注册</button>
+      <pre id="result"></pre>
+    </div>
+  </div>
+
+  <script src="/common.js"></script>
+  <script>
+    renderNavbar('register');
+
+    async function registerUser() {
+      try {
+        const username = document.getElementById('username').value.trim();
+        const password = document.getElementById('password').value.trim();
+
+        const data = await request('/api/auth/register', {
+          method: 'POST',
+          headers: getAuthHeaders(true),
+          body: JSON.stringify({ username, password })
+        });
+
+        showJson('result', data);
+        alert('注册成功，请前往登录页面');
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+  </script>
+</body>
+</html>

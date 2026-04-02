@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>统计结果 - 问卷系统</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="navbar" class="navbar"></div>
+
+  <div class="container">
+    <div class="card">
+      <h1>问卷统计结果</h1>
+      <input id="surveyId" placeholder="请输入 surveyId" />
+      <div class="grid two">
+        <button onclick="loadSavedSurveyId()">读取当前问卷ID</button>
+        <button onclick="loadSurveyStats()">查看整个问卷统计</button>
+      </div>
+      <pre id="surveyStatsRaw"></pre>
+    </div>
+
+    <div class="card">
+      <h2>单题统计</h2>
+      <input id="questionId" placeholder="请输入 questionId" />
+      <button onclick="loadQuestionStats()">查看单题统计</button>
+      <pre id="questionStatsRaw"></pre>
+    </div>
+
+    <div class="card">
+      <h2>统计结果展示</h2>
+      <div id="statsView"></div>
+    </div>
+  </div>
+
+  <script src="/common.js"></script>
+  <script>
+    renderNavbar('stats');
+    ensureLoggedIn();
+
+    function loadSavedSurveyId() {
+      const saved = localStorage.getItem('currentSurveyId') || '';
+      document.getElementById('surveyId').value = saved;
+    }
+
+    function renderSurveyStats(data) {
+      const container = document.getElementById('statsView');
+
+      if (!data || !data.stats || !Array.isArray(data.stats)) {
+        container.innerHTML = '<p>暂无统计数据</p>';
+        return;
+      }
+
+      const html = `
+        <div class="question-card">
+          <h3>问卷标题：${data.survey.title}</h3>
+          <div><strong>总提交次数：</strong>${data.survey.totalSubmissions}</div>
+        </div>
+        ${data.stats.map(stat => renderOneStat(stat)).join('')}
+      `;
+
+      container.innerHTML = html;
+    }
+
+    function renderOneStat(stat) {
+      if (stat.type === 'single' || stat.type === 'multiple') {
+        const options = Object.entries(stat.optionCounts || {})
+          .map(([key, value]) => `<li>${key}：${value}</li>`)
+          .join('');
+
+        return `
+          <div class="question-card">
+            <h3>${stat.title}</h3>
+            <div><strong>题型：</strong>${stat.type}</div>
+            <div><strong>作答人数：</strong>${stat.totalAnswered}</div>
+            <ul>${options}</ul>
+          </div>
+        `;
+      }
+
+      if (stat.type === 'text') {
+        const answers = (stat.answers || []).length
+          ? stat.answers.map(item => `<li>${item}</li>`).join('')
+          : '<li>暂无回答</li>';
+
+        return `
+          <div class="question-card">
+            <h3>${stat.title}</h3>
+            <div><strong>题型：</strong>text</div>
+            <div><strong>作答人数：</strong>${stat.totalAnswered}</div>
+            <ul>${answers}</ul>
+          </div>
+        `;
+      }
+
+      if (stat.type === 'number') {
+        const answers = (stat.answers || []).length
+          ? stat.answers.map(item => `<li>${item}</li>`).join('')
+          : '<li>暂无回答</li>';
+
+        return `
+          <div class="question-card">
+            <h3>${stat.title}</h3>
+            <div><strong>题型：</strong>number</div>
+            <div><strong>作答人数：</strong>${stat.totalAnswered}</div>
+            <div><strong>平均值：</strong>${stat.average === null ? '暂无' : stat.average}</div>
+            <ul>${answers}</ul>
+          </div>
+        `;
+      }
+
+      return `
+        <div class="question-card">
+          <h3>${stat.title}</h3>
+          <div>暂不支持展示该题型统计</div>
+        </div>
+      `;
+    }
+
+    async function loadSurveyStats() {
+      try {
+        const surveyId = document.getElementById('surveyId').value.trim();
+        const data = await request(`/api/stats/survey/${surveyId}`, {
+          method: 'GET',
+          headers: getAuthHeaders(false)
+        });
+
+        showJson('surveyStatsRaw', data);
+        renderSurveyStats(data);
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function loadQuestionStats() {
+      try {
+        const questionId = document.getElementById('questionId').value.trim();
+        const data = await request(`/api/stats/question/${questionId}`, {
+          method: 'GET',
+          headers: getAuthHeaders(false)
+        });
+
+        showJson('questionStatsRaw', data);
+        document.getElementById('statsView').innerHTML = renderOneStat(data.stats);
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    loadSavedSurveyId();
+  </script>
+</body>
+</html>
