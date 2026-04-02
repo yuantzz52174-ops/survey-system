@@ -124,6 +124,7 @@
 - 数字题：平均值
 
 ## 项目结构
+``
 survey-system/
 
 ├── app.js
@@ -171,5 +172,6 @@ survey-system/
     ├── report.md
     
     └── test-cases.md
+``
 
 
