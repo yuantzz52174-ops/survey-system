@@ -1,30 +1,13 @@
-const Survey = require('../models/Survey');
 const Question = require('../models/Question');
+const Survey = require('../models/Survey');
 
-exports.addQuestion = async (req, res) => {
+exports.createQuestion = async (req, res) => {
   try {
-    const { surveyId } = req.params;
-    const {
-      order,
-      type,
-      title,
-      options,
-      required,
-      rules,
-      jumpLogic
-    } = req.body;
+    const { surveyId } = req.query;
+    const { type, title, options, required, rules, isShared } = req.body;
 
-    const survey = await Survey.findOne({
-      _id: surveyId,
-      ownerId: req.user.userId
-    });
-
-    if (!survey) {
-      return res.status(404).json({ message: '问卷不存在或无权限操作' });
-    }
-
-    if (!order || !type || !title) {
-      return res.status(400).json({ message: 'order、type、title 不能为空' });
+    if (!type || !title) {
+      return res.status(400).json({ message: 'type 和 title 不能为空' });
     }
 
     if (!['single', 'multiple', 'text', 'number'].includes(type)) {
@@ -34,124 +17,79 @@ exports.addQuestion = async (req, res) => {
     if ((type === 'single' || type === 'multiple') && (!options || options.length < 2)) {
       return res.status(400).json({ message: '单选题或多选题至少需要两个选项' });
     }
-
     if ((type === 'text' || type === 'number') && options && options.length > 0) {
       return res.status(400).json({ message: '填空题不应包含 options' });
     }
 
-    const existingQuestion = await Question.findOne({ surveyId, order });
-    if (existingQuestion) {
-      return res.status(400).json({ message: '该问卷中题目顺序不能重复' });
-    }
-
     const question = await Question.create({
-      surveyId,
-      order,
+      creatorId: req.user.userId,
+      isShared: isShared || false,
       type,
       title,
       options: options || [],
       required: required || false,
-      rules: rules || {},
-      jumpLogic: jumpLogic || []
+      rules: rules || {}
     });
 
-    res.status(201).json({
-      message: '题目添加成功',
-      question
-    });
+    if (surveyId) {
+      const survey = await Survey.findOne({ _id: surveyId, ownerId: req.user.userId });
+      if (survey && !survey.isPublished) {
+        const order = survey.questions.length + 1;
+        survey.questions.push({ questionId: question._id, order: order, jumpLogic: [] });
+        await survey.save();
+      }
+    }
+
+    res.status(201).json({ message: '题目创建成功', question });
   } catch (error) {
-    res.status(500).json({
-      message: '添加题目失败',
-      error: error.message
-    });
+    res.status(500).json({ message: '添加题目失败', error: error.message });
   }
 };
 
-exports.getQuestionsBySurvey = async (req, res) => {
+exports.updateQuestion = async (req, res) => {
   try {
-    const { surveyId } = req.params;
+    const { id } = req.params;
+    const updateData = req.body;
 
-    const survey = await Survey.findOne({
-      _id: surveyId,
-      ownerId: req.user.userId
-    });
-
-    if (!survey) {
-      return res.status(404).json({ message: '问卷不存在或无权限查看' });
-    }
-
-    const questions = await Question.find({ surveyId }).sort({ order: 1 });
-
-    res.json({
-      message: '获取题目成功',
-      questions
-    });
-  } catch (error) {
-    res.status(500).json({
-      message: '获取题目失败',
-      error: error.message
-    });
-  }
-};
-
-exports.updateQuestionJumpLogic = async (req, res) => {
-  try {
-    const { questionId } = req.params;
-    const { jumpLogic } = req.body;
-
-    if (!Array.isArray(jumpLogic)) {
-      return res.status(400).json({ message: 'jumpLogic 必须是数组' });
-    }
-
-    const question = await Question.findById(questionId);
-    if (!question) {
+    const currentQuestion = await Question.findById(id);
+    if (!currentQuestion) {
       return res.status(404).json({ message: '题目不存在' });
     }
 
-    const survey = await Survey.findOne({
-      _id: question.surveyId,
-      ownerId: req.user.userId
-    });
-
-    if (!survey) {
+    if (currentQuestion.creatorId.toString() !== req.user.userId.toString()) {
       return res.status(403).json({ message: '无权限修改该题目' });
     }
 
-    const allQuestions = await Question.find({ surveyId: question.surveyId });
+    const isUsedInPublishedSurvey = await Survey.exists({
+      'questions.questionId': id,
+      $or: [{ isPublished: true }, { isClosed: true }]
+    });
 
-    for (const rule of jumpLogic) {
-      if (!rule.condition || !rule.targetQuestionId) {
-        return res.status(400).json({ message: '每条跳转规则都必须包含 condition 和 targetQuestionId' });
-      }
+    if (isUsedInPublishedSurvey) {
+      const { _id, createdAt, updatedAt, __v, ...questionBaseData } = currentQuestion.toObject();
 
-      const targetQuestion = allQuestions.find(
-        q => q._id.toString() === rule.targetQuestionId.toString()
-      );
+      const newVersionData = {
+        ...questionBaseData,
+        ...updateData,
+        version: currentQuestion.version + 1,
+        originalId: currentQuestion.originalId
+      };
 
-      if (!targetQuestion) {
-        return res.status(400).json({ message: 'targetQuestionId 不存在于当前问卷中' });
-      }
-
-      if (targetQuestion._id.toString() === question._id.toString()) {
-        return res.status(400).json({ message: '不能跳转到自己' });
-      }
-
-      if (targetQuestion.order <= question.order) {
-        return res.status(400).json({ message: '当前版本只允许向后跳转，不能跳转到当前题或前面的题目' });
-      }
+      const newQuestion = await Question.create(newVersionData);
+      return res.status(201).json({
+        message: '该题已被发布问卷使用，已自动生成新版本以保护历史数据',
+        data: newQuestion,
+        isNewVersion: true
+      });
+    } else {
+      const updatedQuestion = await Question.findByIdAndUpdate(id, updateData, { new: true });
+      return res.status(200).json({
+        message: '题目修改成功',
+        data: updatedQuestion,
+        isNewVersion: false
+      });
     }
-
-    question.jumpLogic = jumpLogic;
-    await question.save();
-
-    res.json({
-      message: '跳转逻辑更新成功',
-      question
-    });
   } catch (error) {
-    res.status(500).json({
-      message: '更新跳转逻辑失败',
-      error: error.message
-    });
+    res.status(500).json({ message: '修改题目失败', error: error.message });
   }
 };

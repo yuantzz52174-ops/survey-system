@@ -11,24 +11,25 @@
 
   <div class="container">
     <div class="card">
-      <h1>问卷统计结果</h1>
+      <h1>整体问卷统计</h1>
       <input id="surveyId" placeholder="请输入 surveyId" />
       <div class="grid two">
         <button onclick="loadSavedSurveyId()">读取当前问卷ID</button>
-        <button onclick="loadSurveyStats()">查看整个问卷统计</button>
+        <button onclick="loadSurveyStats()">查看问卷统计</button>
       </div>
       <pre id="surveyStatsRaw"></pre>
     </div>
 
-    <div class="card">
-      <h2>单题统计</h2>
-      <input id="questionId" placeholder="请输入 questionId" />
-      <button onclick="loadQuestionStats()">查看单题统计</button>
-      <pre id="questionStatsRaw"></pre>
+    <div class="card" style="border: 2px solid #2563eb;">
+      <h2>🌍 跨问卷全局统计 (多版本聚合)</h2>
+      <p class="small">输入题目的 originalId，查看该题及其所有衍生版本在全站所有问卷中的总体分布。</p>
+      <input id="globalOriginalId" placeholder="请输入题目的 originalId" />
+      <button class="secondary" onclick="loadGlobalStats()">透视全局数据</button>
+      <pre id="globalStatsRaw"></pre>
     </div>
 
     <div class="card">
-      <h2>统计结果展示</h2>
+      <h2>📊 统计结果展示图谱</h2>
       <div id="statsView"></div>
     </div>
   </div>
@@ -39,80 +40,44 @@
     ensureLoggedIn();
 
     function loadSavedSurveyId() {
-      const saved = localStorage.getItem('currentSurveyId') || '';
-      document.getElementById('surveyId').value = saved;
+      document.getElementById('surveyId').value = localStorage.getItem('currentSurveyId') || '';
     }
 
     function renderSurveyStats(data) {
       const container = document.getElementById('statsView');
-
-      if (!data || !data.stats || !Array.isArray(data.stats)) {
+      if (!data || !data.stats) {
         container.innerHTML = '<p>暂无统计数据</p>';
         return;
       }
 
-      const html = `
+      const header = `
         <div class="question-card">
-          <h3>问卷标题：${data.survey.title}</h3>
-          <div><strong>总提交次数：</strong>${data.survey.totalSubmissions}</div>
+          <h3>${data.survey ? '问卷标题：' + data.survey.title : '全局统计模式'}</h3>
+          <div><strong>总涉及答卷数：</strong>${data.survey ? data.survey.totalSubmissions : data.totalInvolvedSurveys}</div>
         </div>
-        ${data.stats.map(stat => renderOneStat(stat)).join('')}
       `;
 
-      container.innerHTML = html;
+      // 判断传进来的是数组（整卷统计）还是单个对象（全局单题）
+      const statsList = Array.isArray(data.stats) ? data.stats : [data.stats];
+      container.innerHTML = header + statsList.map(stat => renderOneStat(stat)).join('');
     }
 
     function renderOneStat(stat) {
+      let content = '';
       if (stat.type === 'single' || stat.type === 'multiple') {
-        const options = Object.entries(stat.optionCounts || {})
-          .map(([key, value]) => `<li>${key}：${value}</li>`)
-          .join('');
-
-        return `
-          <div class="question-card">
-            <h3>${stat.title}</h3>
-            <div><strong>题型：</strong>${stat.type}</div>
-            <div><strong>作答人数：</strong>${stat.totalAnswered}</div>
-            <ul>${options}</ul>
-          </div>
-        `;
-      }
-
-      if (stat.type === 'text') {
-        const answers = (stat.answers || []).length
-          ? stat.answers.map(item => `<li>${item}</li>`).join('')
-          : '<li>暂无回答</li>';
-
-        return `
-          <div class="question-card">
-            <h3>${stat.title}</h3>
-            <div><strong>题型：</strong>text</div>
-            <div><strong>作答人数：</strong>${stat.totalAnswered}</div>
-            <ul>${answers}</ul>
-          </div>
-        `;
-      }
-
-      if (stat.type === 'number') {
-        const answers = (stat.answers || []).length
-          ? stat.answers.map(item => `<li>${item}</li>`).join('')
-          : '<li>暂无回答</li>';
-
-        return `
-          <div class="question-card">
-            <h3>${stat.title}</h3>
-            <div><strong>题型：</strong>number</div>
-            <div><strong>作答人数：</strong>${stat.totalAnswered}</div>
-            <div><strong>平均值：</strong>${stat.average === null ? '暂无' : stat.average}</div>
-            <ul>${answers}</ul>
-          </div>
-        `;
+        const options = Object.entries(stat.optionCounts || {}).map(([k, v]) => `<li>${k}：<b>${v}</b> 票</li>`).join('');
+        content = `<ul>${options}</ul>`;
+      } else if (stat.type === 'text' || stat.type === 'number') {
+        const list = (stat.answers || []).slice(0, 10).map(i => `<li>${i}</li>`).join(''); // 最多展示 10 条
+        content = `<div>${stat.average ? '平均值：' + stat.average : ''}</div><ul>${list || '<li>无回答</li>'}</ul>`;
       }
 
       return `
         <div class="question-card">
           <h3>${stat.title}</h3>
-          <div>暂不支持展示该题型统计</div>
+          <div class="small">题型：${stat.type} | 有效作答人次：${stat.totalAnswered}</div>
+          <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;">
+          ${content}
         </div>
       `;
     }
@@ -120,31 +85,22 @@
     async function loadSurveyStats() {
       try {
         const surveyId = document.getElementById('surveyId').value.trim();
-        const data = await request(`/api/stats/survey/${surveyId}`, {
-          method: 'GET',
-          headers: getAuthHeaders(false)
-        });
-
+        const data = await request(`/api/stats/survey/${surveyId}`, { headers: getAuthHeaders(false) });
         showJson('surveyStatsRaw', data);
         renderSurveyStats(data);
-      } catch (err) {
-        alert(err.message);
-      }
+      } catch (err) { alert(err.message); }
     }
 
-    async function loadQuestionStats() {
+    // 新增：调用全局统计 API
+    async function loadGlobalStats() {
       try {
-        const questionId = document.getElementById('questionId').value.trim();
-        const data = await request(`/api/stats/question/${questionId}`, {
-          method: 'GET',
-          headers: getAuthHeaders(false)
-        });
+        const originalId = document.getElementById('globalOriginalId').value.trim();
+        if(!originalId) return alert("请输入 originalId");
 
-        showJson('questionStatsRaw', data);
-        document.getElementById('statsView').innerHTML = renderOneStat(data.stats);
-      } catch (err) {
-        alert(err.message);
-      }
+        const data = await request(`/api/stats/global/${originalId}`, { headers: getAuthHeaders(false) });
+        showJson('globalStatsRaw', data);
+        renderSurveyStats(data);
+      } catch (err) { alert(err.message); }
     }
 
     loadSavedSurveyId();

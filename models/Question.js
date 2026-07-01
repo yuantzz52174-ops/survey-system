@@ -1,30 +1,29 @@
+// models/Question.js
 const mongoose = require('mongoose');
 
-const jumpRuleSchema = new mongoose.Schema(
-  {
-    condition: {
-      type: mongoose.Schema.Types.Mixed,
-      required: true
-    },
-    targetQuestionId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Question',
-      required: true
-    }
-  },
-  { _id: false }
-);
-
 const questionSchema = new mongoose.Schema({
-  surveyId: {
+  // 核心溯源字段：同一道题的所有版本，originalId 保持一致
+  originalId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Survey',
-    required: true
+    default: function() { return this._id; }
   },
-  order: {
+  // 版本号
+  version: {
     type: Number,
+    default: 1
+  },
+  // 题目所有权与共享
+  creatorId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
     required: true
   },
+  isShared: {
+    type: Boolean,
+    default: false
+  },
+
+  // 移除了原有的 surveyId 和 order
   type: {
     type: String,
     enum: ['single', 'multiple', 'text', 'number'],
@@ -44,43 +43,17 @@ const questionSchema = new mongoose.Schema({
     default: false
   },
   rules: {
-    minSelect: {
-      type: Number,
-      default: null
-    },
-    maxSelect: {
-      type: Number,
-      default: null
-    },
-    exactSelect: {
-      type: Number,
-      default: null
-    },
-    minLength: {
-      type: Number,
-      default: null
-    },
-    maxLength: {
-      type: Number,
-      default: null
-    },
-    minValue: {
-      type: Number,
-      default: null
-    },
-    maxValue: {
-      type: Number,
-      default: null
-    },
-    isInteger: {
-      type: Boolean,
-      default: false
-    }
+    minSelect: { type: Number, default: null },
+    maxSelect: { type: Number, default: null },
+    exactSelect: { type: Number, default: null },
+    minLength: { type: Number, default: null },
+    maxLength: { type: Number, default: null },
+    minValue: { type: Number, default: null },
+    maxValue: { type: Number, default: null },
+    isInteger: { type: Boolean, default: false }
   },
-  jumpLogic: {
-    type: [jumpRuleSchema],
-    default: []
-  },
+  // 原有的 jumpLogic 被移至 Survey 模型中
+
   createdAt: {
     type: Date,
     default: Date.now

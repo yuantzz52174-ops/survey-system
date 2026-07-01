@@ -2,32 +2,30 @@ const Survey = require('../models/Survey');
 const Question = require('../models/Question');
 const Answer = require('../models/Answer');
 const { validateAnswer } = require('../services/answerValidator');
-const {
-  isEmptyAnswer,
-  getNextByOrder,
-  getNextQuestion
-} = require('../services/jumpLogicService');
+const { isEmptyAnswer, getNextByOrder, getNextQuestion } = require('../services/jumpLogicService');
 
 async function getAvailableSurveyAndQuestions(accessCode) {
-  const survey = await Survey.findOne({ accessCode });
+  const survey = await Survey.findOne({ accessCode }).populate('questions.questionId');
 
-  if (!survey) {
-    return { error: { status: 404, message: '问卷不存在' } };
-  }
-
-  if (!survey.isPublished) {
-    return { error: { status: 400, message: '问卷尚未发布' } };
-  }
-
-  if (survey.isClosed) {
-    return { error: { status: 400, message: '问卷已关闭' } };
-  }
-
+  if (!survey) return { error: { status: 404, message: '问卷不存在' } };
+  if (!survey.isPublished) return { error: { status: 400, message: '问卷尚未发布' } };
+  if (survey.isClosed) return { error: { status: 400, message: '问卷已关闭' } };
   if (survey.deadline && new Date() > new Date(survey.deadline)) {
     return { error: { status: 400, message: '问卷已截止' } };
   }
 
-  const questions = await Question.find({ surveyId: survey._id }).sort({ order: 1 });
+  const questions = survey.questions
+    .filter(wrapper => wrapper.questionId)
+    .map(wrapper => {
+      const qData = wrapper.questionId.toObject();
+      return {
+        ...qData,
+        _id: qData._id,
+        order: wrapper.order,
+        jumpLogic: wrapper.jumpLogic
+      };
+    })
+    .sort((a, b) => a.order - b.order);
 
   return { survey, questions };
 }
@@ -35,11 +33,8 @@ async function getAvailableSurveyAndQuestions(accessCode) {
 exports.getSurveyForFill = async (req, res) => {
   try {
     const { accessCode } = req.params;
-
     const result = await getAvailableSurveyAndQuestions(accessCode);
-    if (result.error) {
-      return res.status(result.error.status).json({ message: result.error.message });
-    }
+    if (result.error) return res.status(result.error.status).json({ message: result.error.message });
 
     const { survey, questions } = result;
     const firstQuestion = questions.length > 0 ? questions[0] : null;
@@ -47,20 +42,13 @@ exports.getSurveyForFill = async (req, res) => {
     res.json({
       message: '获取问卷成功',
       survey: {
-        id: survey._id,
-        title: survey.title,
-        description: survey.description,
-        isAnonymous: survey.isAnonymous,
-        accessCode: survey.accessCode,
-        firstQuestion,
-        totalQuestions: questions.length
+        id: survey._id, title: survey.title, description: survey.description,
+        isAnonymous: survey.isAnonymous, accessCode: survey.accessCode,
+        firstQuestion, totalQuestions: questions.length
       }
     });
   } catch (error) {
-    res.status(500).json({
-      message: '获取问卷失败',
-      error: error.message
-    });
+    res.status(500).json({ message: '获取问卷失败', error: error.message });
   }
 };
 
@@ -69,51 +57,31 @@ exports.getNextQuestionByAnswer = async (req, res) => {
     const { accessCode } = req.params;
     const { questionId, value } = req.body;
 
-    if (!questionId) {
-      return res.status(400).json({ message: 'questionId 不能为空' });
-    }
+    if (!questionId) return res.status(400).json({ message: 'questionId 不能为空' });
 
     const result = await getAvailableSurveyAndQuestions(accessCode);
-    if (result.error) {
-      return res.status(result.error.status).json({ message: result.error.message });
-    }
+    if (result.error) return res.status(result.error.status).json({ message: result.error.message });
 
     const { questions } = result;
+    const currentQuestion = questions.find(q => q._id.toString() === questionId.toString());
 
-    const currentQuestion = questions.find(
-      q => q._id.toString() === questionId.toString()
-    );
-
-    if (!currentQuestion) {
-      return res.status(404).json({ message: '当前题目不存在' });
-    }
+    if (!currentQuestion) return res.status(404).json({ message: '当前题目不存在' });
 
     const validationError = validateAnswer(currentQuestion, value);
     if (validationError) {
-      return res.status(400).json({
-        message: '当前题答案不合法',
-        error: validationError
-      });
+      return res.status(400).json({ message: '当前题答案不合法', error: validationError });
     }
 
     let nextQuestion;
-
     if (isEmptyAnswer(value)) {
       nextQuestion = getNextByOrder(currentQuestion, questions);
     } else {
       nextQuestion = getNextQuestion(currentQuestion, value, questions);
     }
 
-    res.json({
-      message: '获取下一题成功',
-      completed: !nextQuestion,
-      nextQuestion: nextQuestion || null
-    });
+    res.json({ message: '获取下一题成功', completed: !nextQuestion, nextQuestion: nextQuestion || null });
   } catch (error) {
-    res.status(500).json({
-      message: '获取下一题失败',
-      error: error.message
-    });
+    res.status(500).json({ message: '获取下一题失败', error: error.message });
   }
 };
 
@@ -127,36 +95,23 @@ exports.submitSurvey = async (req, res) => {
     }
 
     const result = await getAvailableSurveyAndQuestions(accessCode);
-    if (result.error) {
-      return res.status(result.error.status).json({ message: result.error.message });
-    }
+    if (result.error) return res.status(result.error.status).json({ message: result.error.message });
 
     const { survey, questions } = result;
-
-    if (questions.length === 0) {
-      return res.status(400).json({ message: '问卷没有题目，无法提交' });
-    }
+    if (questions.length === 0) return res.status(400).json({ message: '问卷没有题目，无法提交' });
 
     const answerMap = new Map();
     const validationErrors = [];
 
     for (const item of answers) {
       if (!item.questionId) {
-        validationErrors.push({
-          questionId: null,
-          message: '存在未提供 questionId 的答案项'
-        });
+        validationErrors.push({ questionId: null, message: '存在未提供 questionId 的答案项' });
         continue;
       }
-
       if (answerMap.has(item.questionId.toString())) {
-        validationErrors.push({
-          questionId: item.questionId,
-          message: '同一题目重复提交答案'
-        });
+        validationErrors.push({ questionId: item.questionId, message: '同一题目重复提交答案' });
         continue;
       }
-
       answerMap.set(item.questionId.toString(), item);
     }
 
@@ -173,46 +128,28 @@ exports.submitSurvey = async (req, res) => {
 
       const errorMessage = validateAnswer(currentQuestion, currentValue);
       if (errorMessage) {
-        validationErrors.push({
-          questionId: currentQuestion._id,
-          title: currentQuestion.title,
-          message: errorMessage
-        });
+        validationErrors.push({ questionId: currentQuestion._id, title: currentQuestion.title, message: errorMessage });
       }
 
       let nextQuestion = null;
-
       if (isEmptyAnswer(currentValue)) {
-        if (currentQuestion.required) {
-          break;
-        } else {
-          nextQuestion = getNextByOrder(currentQuestion, questions);
-        }
+        if (currentQuestion.required) break;
+        else nextQuestion = getNextByOrder(currentQuestion, questions);
       } else {
         nextQuestion = getNextQuestion(currentQuestion, currentValue, questions);
       }
-
       currentQuestion = nextQuestion;
     }
 
-    const expectedPathIds = new Set(
-      expectedPath.map(q => q._id.toString())
-    );
-
+    const expectedPathIds = new Set(expectedPath.map(q => q._id.toString()));
     for (const item of answers) {
       if (!expectedPathIds.has(item.questionId.toString())) {
-        validationErrors.push({
-          questionId: item.questionId,
-          message: '该题不在本次有效作答路径中，不能提交其答案'
-        });
+        validationErrors.push({ questionId: item.questionId, message: '该题不在本次有效作答路径中，不能提交其答案' });
       }
     }
 
     if (validationErrors.length > 0) {
-      return res.status(400).json({
-        message: '答案校验失败',
-        errors: validationErrors
-      });
+      return res.status(400).json({ message: '答案校验失败', errors: validationErrors });
     }
 
     const answerDoc = await Answer.create({
@@ -225,16 +162,9 @@ exports.submitSurvey = async (req, res) => {
     res.status(201).json({
       message: '问卷提交成功',
       submission: answerDoc,
-      path: expectedPath.map(q => ({
-        questionId: q._id,
-        title: q.title,
-        order: q.order
-      }))
+      path: expectedPath.map(q => ({ questionId: q._id, title: q.title, order: q.order }))
     });
   } catch (error) {
-    res.status(500).json({
-      message: '问卷提交失败',
-      error: error.message
-    });
+    res.status(500).json({ message: '问卷提交失败', error: error.message });
   }
 };
